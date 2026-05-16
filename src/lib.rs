@@ -6,6 +6,12 @@ pub mod pat;
 use std::ops::Range;
 use std::{mem, fmt, slice};
 
+
+use pelite::pe64::Pe; // Импортируем трейт Pe для доступа к основным методам
+use pelite::image::IMAGE_SCN_CNT_CODE; // Флаг для поиска секции кода
+use pelite::pe64::PeView; // Или pe32::PeView
+use pelite::pe64::PeObject; // Или pe32::PeView
+
 //----------------------------------------------------------------
 
 pub const MAX_STORE: usize = 5;
@@ -224,31 +230,35 @@ impl<'a> Scanner<'a> {
 
 //----------------------------------------------------------------
 
-#[cfg(feature = "pelite")]
-impl<'a, 'b> From<&'b pelite::pe32::peview::PeView<'a>> for Scanner<'a> {
-	fn from(pe: &'b pelite::pe32::peview::PeView<'a>) -> Scanner<'a> {
-		let opt = pe.optional_header();
-		let vbase = pe.virtual_base() as u64;
-		if opt.BaseOfCode != 0 && opt.SizeOfCode != 0 {
-			Scanner::new(pe.image(), opt.BaseOfCode..opt.BaseOfCode + opt.SizeOfCode, vbase)
-		}
-		else {
-			Scanner::new(pe.image(), 0..pe.image().len() as u32, vbase)
-		}
-	}
-}
-#[cfg(feature = "pelite")]
-impl<'a, 'b> From<&'b pelite::pe64::peview::PeView<'a>> for Scanner<'a> {
-	fn from(pe: &'b pelite::pe64::peview::PeView<'a>) -> Scanner<'a> {
-		let opt = pe.optional_header();
-		let vbase = pe.virtual_base() as u64;
-		if opt.BaseOfCode != 0 && opt.SizeOfCode != 0 {
-			Scanner::new(pe.image(), opt.BaseOfCode..opt.BaseOfCode + opt.SizeOfCode, vbase)
-		}
-		else {
-			Scanner::new(pe.image(), 0..pe.image().len() as u32, vbase)
-		}
-	}
+impl<'a> From<&'a PeView<'a>> for Scanner<'a> {
+    fn from(pe: &'a PeView<'a>) -> Self {
+        // 1. Получаем базу образа
+        // Для PeView, указывающего на область памяти, правильным базовым адресом
+        // будет адрес начала этой области. Передаём его в scanner.
+        // ВАЖНО: Если PeView создан через PeView::from_bytes и указывает
+        // на произвольный кусок памяти, image_base должен быть передан отдельно.
+        // Предположим, что scanner ожидает именно виртуальный адрес начала образа.
+        let image_base = pe.optional_header().ImageBase;; // Для PeView этот метод всё ещё существует
+
+        // 2. Получаем слайс с данными образа
+        let image_data = pe.image();
+
+        // 3. Определяем диапазон для сканирования
+        let scan_range = if let Some(code_section) = pe.section_headers()
+            .iter()
+            .find(|s| s.Characteristics & IMAGE_SCN_CNT_CODE != 0)
+        {
+            // Используем VirtualAddress и VirtualSize из заголовка секции
+            let start = code_section.VirtualAddress;
+            let end = start + code_section.VirtualSize;
+            Range { start, end }
+        } else {
+            // Если секция не найдена, сканируем весь образ
+            Range { start: 0, end: image_data.len() as u32 }
+        };
+
+        Scanner::new(image_data, scan_range, image_base)
+    }
 }
 
 //----------------------------------------------------------------
